@@ -82,6 +82,8 @@
 #define	cstMaxCnt	10 // number of consecutive reads required for
 					   // the state of a button to be updated
 
+#define CAPTURE_SIZE	100 // ER 2/9
+
 struct btn {
 	BYTE	stBtn;	// status of the button (pressed or released)
 	BYTE	stCur;  // current read state of the button
@@ -118,9 +120,13 @@ volatile	struct btn	PmodSwt2;
 volatile	struct btn	PmodSwt3;
 volatile	struct btn	PmodSwt4;
 
-uint16_t ic2TimeData[100]; //JMH change 2/7
-uint16_t ic3TimeData[100]; //JMH change 2/7
+uint16_t ic2TimeData[CAPTURE_SIZE]; //JMH change 2/7
+int ic2TimeDataIdx = 0;
+
+uint16_t ic3TimeData[CAPTURE_SIZE]; //JMH change 2/7
+int ic3TimeDataIdx = 0;
 //EDIT: need global index 
+
 
 
 /* ------------------------------------------------------------ */
@@ -282,12 +288,19 @@ void __ISR(_TIMER_5_VECTOR, ipl7) Timer5Handler(void)
 */
 void __ISR(_INPUT_CAPTURE_2_VECTOR, ipl5) _IC2_IntHandler(void) 
 {
+
+    // ER 2/9 Hopefully this works
     mIC2ClearIntFlag();
     uint16_t buffer_data;
-    while(IC2CON & (0x0003)){
-        //EDIT: set buff data = buffer register 
-        //add in a global index to increment every loop
+    while(IC2CON & (0x0008)){
+        buffer_data = (uint16_t) IC2BUF;
     }
+
+    ic2TimeData[ic2TimeDataIdx] = buffer_data;
+
+    ic2TimeDataIdx++;
+    ic2TimeDataIdx %= CAPTURE_SIZE;
+
     // clear interrupt flag for Input Capture 2
     // increment counter
 }
@@ -295,10 +308,20 @@ void __ISR(_INPUT_CAPTURE_2_VECTOR, ipl5) _IC2_IntHandler(void)
 void __ISR(_INPUT_CAPTURE_3_VECTOR, ipl5) _IC3_IntHandler(void) 
 {
     mIC3ClearIntFlag();  
-        while(IC2CON & (0x0003)){
-        //EDIT: set buff data = buffer register 
-        //add in a global index to increment every loop      
+    uint16_t buffer_data;
+    while(IC3CON & (0x0008)){
+	 // 32 bit val
+	 uint32_t temp = IC3BUF;
+	 // shift right by 16, top 16 bits are now at the lower 16 bits
+	 temp = temp >> 16;
+	 // type cast into 16 bit val
+	 buffer_data = (uint16_t) temp;
     }
+
+    ic3TimeData[ic3TimeDataIdx] = buffer_data;
+
+    ic3TimeDataIdx++;
+    ic3TimeDataIdx %= CAPTURE_SIZE;
     
     // clear interrupt flag for Input Capture 3
     // increment counter
@@ -711,7 +734,7 @@ void DeviceInit() {
 
 void AppInit() {
     int i = 0;
-    for(; i<100; i++){
+    for(; i<CAPTURE_SIZE; i++){
         ic2TimeData[i]=0; //JMH change 2/7
         ic3TimeData[i]=0; //JMH change 2/7
     }
