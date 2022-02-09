@@ -136,6 +136,7 @@ int ic3TimeDataIdx = 0;
 void	DeviceInit(void);
 void	AppInit(void);
 void	Wait_ms(WORD ms);
+void    InitLeds( void );
 
 /* ------------------------------------------------------------ */
 /*				Interrupt Service Routines						*/
@@ -165,6 +166,7 @@ void __ISR(_TIMER_5_VECTOR, ipl7) Timer5Handler(void)
 	
 	mT5ClearIntFlag();
 	prtLed1Set = (1<<bnLed1); //change JMH 2/2/22
+    /*
 	// Read the raw state of the button pins.
 	btnBtn1.stCur = ( prtBtn1 & ( 1 << bnBtn1 ) ) ? stPressed : stReleased;
 	btnBtn2.stCur = ( prtBtn2 & ( 1 << bnBtn2 ) ) ? stPressed : stReleased;
@@ -276,7 +278,7 @@ void __ISR(_TIMER_5_VECTOR, ipl7) Timer5Handler(void)
 		PmodSwt4.stBtn = PmodSwt4.stCur;
 		PmodSwt4.cst = 0;
 	}
-       
+    */ 
     prtLed1Clr	= ( 1 << bnLed1 ); //change JMH 2/2/22
 }
 
@@ -288,10 +290,13 @@ void __ISR(_TIMER_5_VECTOR, ipl7) Timer5Handler(void)
 */
 void __ISR(_INPUT_CAPTURE_2_VECTOR, ipl5) _IC2_IntHandler(void) 
 {
-
+    
     // ER 2/9 Hopefully this works
     mIC2ClearIntFlag();
+    prtLed2Set = (1<<bnLed2); //change JMH 2/9/22
     uint16_t buffer_data;
+    buffer_data=ic2TimeData[ic2TimeDataIdx];
+    
     while(IC2CON & (0x0008)){
         buffer_data = (uint16_t) IC2BUF;
     }
@@ -303,12 +308,22 @@ void __ISR(_INPUT_CAPTURE_2_VECTOR, ipl5) _IC2_IntHandler(void)
 
     // clear interrupt flag for Input Capture 2
     // increment counter
+    prtLed2Clr = (1<<bnLed2); //change JMH 2/9/22
 }
 
 void __ISR(_INPUT_CAPTURE_3_VECTOR, ipl5) _IC3_IntHandler(void) 
 {
-    mIC3ClearIntFlag();  
+    mIC3ClearIntFlag(); 
+    prtLed3Set = (1<<bnLed3); //change JMH 2/9/22
+    SpiPutBuff("Hello from", 10);
+	DelayMs(4);
+	SpiPutBuff(szCursorPos, 6);
+	DelayMs(4);
+	SpiPutBuff("Interupt 3!", 9);
+    
     uint16_t buffer_data;
+    buffer_data = ic3TimeData[ic3TimeDataIdx];
+    
     while(IC3CON & (0x0008)){
 	 // 32 bit val
 	 uint32_t temp = IC3BUF;
@@ -322,7 +337,7 @@ void __ISR(_INPUT_CAPTURE_3_VECTOR, ipl5) _IC3_IntHandler(void)
 
     ic3TimeDataIdx++;
     ic3TimeDataIdx %= CAPTURE_SIZE;
-    
+    prtLed3Clr = (1<<bnLed3); //change JMH 2/9/22
     // clear interrupt flag for Input Capture 3
     // increment counter
 }
@@ -662,21 +677,22 @@ void DeviceInit() {
 	OC3RS	= dtcMtrStopped;
 
     //Input capture for timer 2
-    IPC2SET	= ( 1 << 12 ) | ( 0 << 11 ) | ( 1 << 10 ) | ( 1 << 9 ) | ( 1 << 8 ); // interrupt priority level 7, sub 3
-	IFS0CLR = ( 1 << 9 );
-	IEC0SET	= ( 1 << 9 );
+    IPC2SET	= ( 1 << 12 ) | ( 1 << 10 ) | ( 1 << 9 ) | ( 1 << 8 ); // interrupt priority level 7, sub 3
+	//IFS0CLR = ( 1 << 9 );
+	
     
-    IC2CON |= (1<<15) | (1<<7) | (11);
-    IC2CON &= (0<<8) & (0<<2);
-
+    IC2CON |=  (1<<7) | (1<<1) | (1<<0); //on, timer2 counter source, simple capture event mode every rising edge
+    IC2CON &= ~( (1<<8) | (1<<2) | (1<<6) | (1<<5) ); //16 bit, timer2 counter source, simple capture event mode every rising edge
+    IC2CON |= (1<<15);
     
+    IEC0SET	= ( 1 << 9 );
     //Input capture for timer 3
     IPC3SET	= ( 1 << 12 ) | ( 0 << 11 ) | ( 1 << 10 ) | ( 1 << 9 ) | ( 1 << 8 ); // interrupt priority level 7, sub 3
 	IFS0CLR = ( 1 << 13 );
 	IEC0SET	= ( 1 << 13 );
     
-    IC3CON |= (1<<15) | (11);
-    IC3CON &= (0<<8) & (0<<7) &(0<<2)
+    IC3CON |= (1<<15) | (11); //on, simple capture event mode every rising edge
+    IC3CON &= (0<<8) & (0<<7) &(0<<2); //16 bit, timer3 counter source, simple capture event mode every rising edge
     
     
     // Configure Timer 2.
@@ -799,4 +815,5 @@ void InitLeds( void ) //change JMH 2/2/22
 	prtLed2Clr	= ( 1 << bnLed2 );
 	prtLed3Clr	= ( 1 << bnLed3 );
 	prtLed4Clr	= ( 1 << bnLed4 );
-}	
+}
+
