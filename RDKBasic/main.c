@@ -82,7 +82,12 @@
 #define	cstMaxCnt	10 // number of consecutive reads required for
 					   // the state of a button to be updated
 
-#define CAPTURE_SIZE	100 // ER 2/9
+#define CAPTURE_SIZE        100      // ER 2/9
+#define PULSE_PER_REV       137      // KZ 2/16/22     Possible motors have different gear ratio to give us lower than expected 160 Pulse/rev
+#define WHEEL_DUTY_CYCLE    9999     // KZ 2/16/22     Affects PWM signal to wheels on a scale of 0 to 9999
+#define MAX_MIN_EI          150      // KZ 2/16/22     Max and min (negative) value of which the integrated error in the PID control is bound between
+#define IC_MAX_DUTY_CYCLE   9999.0     // KZ 2/16/22
+#define IC_MIN_DUTY_CYCLE   0.0        // KZ 2/16/22
 
 struct btn {
 	BYTE	stBtn;	// status of the button (pressed or released)
@@ -128,6 +133,8 @@ int ic3TimeDataIdx = 0;
 //EDIT: need global index 
 
 uint32_t ic2Counter = 0;
+uint32_t ic2CounterExtra = 0;           //KZ added 2/16/22 as a test variable to make sure counter is accurate both in and out of the while loop in the IC2 
+uint32_t ic3Counter = 0;
 
 
 
@@ -161,12 +168,79 @@ void	Wait_ms(WORD ms);
 */
 
 void __ISR(_TIMER_5_VECTOR, ipl7) Timer5Handler(void)
-{
-    
+{    
 	static	WORD tusLeds = 0;
 	
 	mT5ClearIntFlag();
 	prtLed1Set = (1<<bnLed1); //change JMH 2/2/22
+    
+     /*-------------PID Control-------------*/
+    // In this algorithm, the desired Data is the user input into the program at the #define WHEEL_DUTY_CYCLE
+    // **Current algorithm is in terms of an output compare value range of 0 to 9999, not speed in ft/s.**
+    /////////////////Local Variables/////////////
+    uint16_t currentData = ic2TimeData[ic2TimeDataIdx];
+	//Integration Error
+	static float ei=0.0;
+	//New Error Value, Output, and Error Difference
+	float error_val_n,out,ed;
+	//Past Error Value
+	static float error_val_p=0.0;
+	//Direct Constant
+	float kp=1;
+	//Integration Constant
+	float ki=0.05;			
+	//Difference Constant
+	float kd=0.01;			
+	///////////////////////////////////////////////
+
+	//First take New Error Value
+	error_val_n = (float)WHEEL_DUTY_CYCLE - (float)currentData;
+
+	//Then take Difference between Error Values
+	ed  = error_val_n - error_val_p;
+
+	//Compound the error every speed check
+	ei += ki*error_val_n;
+
+	if(ei > MAX_MIN_EI)
+	{
+		ei = MAX_MIN_EI;
+	}
+	else if(ei < -MAX_MIN_EI)
+	{
+		ei = -MAX_MIN_EI;
+	}
+	
+	//The output of the Speed Control Algorithm
+	out = error_val_n * kp + ei + ed * kd;
+
+	// check to make sure out is in a valid range, 0 to 255.  If not, limit it.
+	if(out > IC_MAX_DUTY_CYCLE)
+	{
+		out = IC_MAX_DUTY_CYCLE;  // can't command more than 100% duty cycle
+	}
+	//Limit the Current
+	if(currentData >= WHEEL_DUTY_CYCLE)
+	{
+
+		out = WHEEL_DUTY_CYCLE;
+	}
+	//Bound the integrator at -4V
+	else if(out < IC_MIN_DUTY_CYCLE)
+	{
+		out = IC_MIN_DUTY_CYCLE;    // can't command a "negative" duty cycle
+	}
+	
+	OC2R = (unsigned char)out;   // needs to be an unsigned 16-bit number
+    OC2RS = (unsigned char)out;
+    OC3R = (unsigned char)out;
+    OC3RS = (unsigned char)out;
+
+	//The new error value is now the past error value
+	error_val_p = error_val_n;
+    
+    
+    /*-------------Button De-bouncing-------------*/
 	// Read the raw state of the button pins.
 	btnBtn1.stCur = ( prtBtn1 & ( 1 << bnBtn1 ) ) ? stPressed : stReleased;
 	btnBtn2.stCur = ( prtBtn2 & ( 1 << bnBtn2 ) ) ? stPressed : stReleased;
@@ -290,33 +364,39 @@ void __ISR(_TIMER_5_VECTOR, ipl7) Timer5Handler(void)
 */
 void __ISR(_INPUT_CAPTURE_2_VECTOR, ipl5) _IC2_IntHandler(void) 
 {
-
     // ER 2/9 Hopefully this works
     mIC2ClearIntFlag();
+    
+    prtLed2Set	= ( 1 << bnLed2 );
     uint16_t buffer_data;
     while(IC2CON & (0x0008)){
+        //ic2CounterExtra++;        //KZ added 2/16/22 to compare to ic2Counter outside of while loop. Checks if 
         buffer_data = (uint16_t) IC2BUF;
     }
 
     ic2TimeData[ic2TimeDataIdx] = buffer_data;
 
     ic2TimeDataIdx++;
-    ic2TimeDataIdx %= CAPTURE_SIZE;   
+    ic2TimeDataIdx %= CAPTURE_SIZE;
 
     // clear interrupt flag for Input Capture 2
     // increment counter
     ic2Counter++;
-    if (ic2Counter >= 1965){    //original 1571
+    if (ic2Counter >= PULSE_PER_REV*20){
         OC2R = 0;
         OC2RS = 0;
         OC3R = 0;
         OC3RS = 0;
     }
+    prtLed2Clr	= ( 1 << bnLed2 );
 }
 
 void __ISR(_INPUT_CAPTURE_3_VECTOR, ipl5) _IC3_IntHandler(void) 
 {
     mIC3ClearIntFlag();  
+    ic3Counter++;
+    
+    prtLed3Set	= ( 1 << bnLed3 );
     uint16_t buffer_data;
     while(IC3CON & (0x0008)){
 	 buffer_data = (uint16_t) IC3BUF;
@@ -330,6 +410,8 @@ void __ISR(_INPUT_CAPTURE_3_VECTOR, ipl5) _IC3_IntHandler(void)
     
     // clear interrupt flag for Input Capture 3
     // increment counter
+    
+    prtLed3Clr	= ( 1 << bnLed3 );
 }
 
 /* ------------------------------------------------------------ */
@@ -394,7 +476,6 @@ int main(void) {
 	DelayMs(2000);
 	SpiDisable();
 
-	prtLed1Set	= ( 1 << bnLed1 );
 	INTEnableInterrupts();
 	while (fTrue)
 	{		
@@ -658,23 +739,23 @@ void DeviceInit() {
 	// Configure Output Compare 2 to drive the left motor.
 	OC2CON	= ( 1 << 3 ) | ( 1 << 2 ) | ( 1 << 1 );	// pwm set up
 	//OC2R	= dtcMtrStopped; //original
-	OC2R = 2500;            //KZ modified 2/14/22
+	OC2R = WHEEL_DUTY_CYCLE;
     //OC2RS	= dtcMtrStopped;  //original
-    OC2RS = 2500;           //KZ modified 2/14/22
+    OC2RS = WHEEL_DUTY_CYCLE;
     
 	// Configure Output Compare 3.
 	OC3CON = ( 1 << 3 ) | ( 1 << 2 ) | ( 1 << 1 );	// pwm
 	//OC3R	= dtcMtrStopped;
-	OC3R = 1000;    //KZ modified 2/14/22
+	OC3R = WHEEL_DUTY_CYCLE;
     //OC3RS	= dtcMtrStopped;
-    OC3RS = 1000;   //KZ modified 2/14/22
+    OC3RS = WHEEL_DUTY_CYCLE;
     
     //Input capture 2 for timer 2
     IPC2SET	= ( 1 << 12 ) | ( 0 << 11 ) | ( 1 << 10 ) | ( 1 << 9 ) | ( 1 << 8 ); // interrupt priority level 5, sub 3
 	IFS0CLR = ( 1 << 9 );
 	IEC0SET	= ( 1 << 9 );
     
-    IC2CON = (1<<7) | (1<<2) | (1<<1);
+    IC2CON = (1<<7) | (1<<1) | (1<<0);  //2/16/22 KZ changed trigger from every edge to only rising edge
 
     
     //Input capture 3 for timer 2
@@ -682,7 +763,7 @@ void DeviceInit() {
 	IFS0CLR = ( 1 << 13 );
 	IEC0SET	= ( 1 << 13 );
     
-    IC3CON = (1<<7) | (1<<2) | (1<<1);
+    IC3CON = (1<<7) | (1<<1) | (1<<0);  //2/16/22 KZ changed trigger from every edge to only rising edge
     
     // turn on Input Capture 2 & 3
     IC2CONSET = (1<<15);
