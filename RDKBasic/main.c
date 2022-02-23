@@ -84,10 +84,10 @@
 
 #define CAPTURE_SIZE        100      // ER 2/9
 #define PULSE_PER_REV       137      // KZ 2/16/22     Possible motors have different gear ratio to give us lower than expected 160 Pulse/rev
-#define WHEEL_DUTY_CYCLE    9999     // KZ 2/16/22     Affects PWM signal to wheels on a scale of 0 to 9999
+#define WHEEL_DUTY_CYCLE    2000     // KZ 2/16/22     Affects PWM signal to wheels on a scale of 0 to 9999
 #define MAX_MIN_EI          150      // KZ 2/16/22     Max and min (negative) value of which the integrated error in the PID control is bound between
-#define IC_MAX_DUTY_CYCLE   9999.0     // KZ 2/16/22
-#define IC_MIN_DUTY_CYCLE   0.0        // KZ 2/16/22
+#define OC_MAX_DUTY_CYCLE   9999.0     // KZ 2/16/22
+#define OC_MIN_DUTY_CYCLE   0.0        // KZ 2/16/22
 
 struct btn {
 	BYTE	stBtn;	// status of the button (pressed or released)
@@ -178,23 +178,41 @@ void __ISR(_TIMER_5_VECTOR, ipl7) Timer5Handler(void)
     // In this algorithm, the desired Data is the user input into the program at the #define WHEEL_DUTY_CYCLE
     // **Current algorithm is in terms of an output compare value range of 0 to 9999, not speed in ft/s.**
     /////////////////Local Variables/////////////
-    uint16_t currentData = ic2TimeData[ic2TimeDataIdx];
+    float desired_ft_sec = 10;
+    uint16_t desiredData = (desired_ft_sec)*5474;    //Time between pulses required for requested duty cycle, in us per pulse
+    uint16_t currentData = ic2TimeData[ic2TimeDataIdx-1];
+    
+    if(ic2TimeDataIdx > 1){
+        uint16_t temp_currentData = ic2TimeData[ic2TimeDataIdx-1] - ic2TimeData[ic2TimeDataIdx - 2];        //index -1 and -2 because index is incremented at end of IC2
+         if( temp_currentData < 0 ){
+            currentData = temp_currentData + 64999;
+        }
+         else{
+             currentData = temp_currentData;
+         }
+    }
+    
+//    static int OC_counter = 0;
+//    OC_counter++;
+//    if( OC_counter >= 8000 )
+//        {desiredData = 8000;}
+    
 	//Integration Error
-	static float ei=0.0;
+	static float ei = 0.0;
 	//New Error Value, Output, and Error Difference
 	float error_val_n,out,ed;
 	//Past Error Value
-	static float error_val_p=0.0;
+	static float error_val_p = 0.0;
 	//Direct Constant
 	float kp=1;
 	//Integration Constant
-	float ki=0.05;			
+	float ki=0.5;			
 	//Difference Constant
 	float kd=0.01;			
 	///////////////////////////////////////////////
 
 	//First take New Error Value
-	error_val_n = (float)WHEEL_DUTY_CYCLE - (float)currentData;
+	error_val_n = (float)desiredData - (float)currentData;
 
 	//Then take Difference between Error Values
 	ed  = error_val_n - error_val_p;
@@ -202,44 +220,43 @@ void __ISR(_TIMER_5_VECTOR, ipl7) Timer5Handler(void)
 	//Compound the error every speed check
 	ei += ki*error_val_n;
 
-	if(ei > MAX_MIN_EI)
-	{
-		ei = MAX_MIN_EI;
-	}
-	else if(ei < -MAX_MIN_EI)
-	{
-		ei = -MAX_MIN_EI;
-	}
+//	if(ei > MAX_MIN_EI)
+//	{
+//		ei = MAX_MIN_EI;
+//	}
+//	else if(ei < -MAX_MIN_EI)
+//	{
+//		ei = -MAX_MIN_EI;
+//	}
 	
 	//The output of the Speed Control Algorithm
 	out = error_val_n * kp + ei + ed * kd;
 
-	// check to make sure out is in a valid range, 0 to 255.  If not, limit it.
-	if(out > IC_MAX_DUTY_CYCLE)
+	// check to make sure out is in a valid range, 0 to 64999.  If not, limit it.
+	if(out > OC_MAX_DUTY_CYCLE)
 	{
-		out = IC_MAX_DUTY_CYCLE;  // can't command more than 100% duty cycle
+		out = OC_MAX_DUTY_CYCLE;  // can't command more than 100% duty cycle
 	}
-	//Limit the Current
-	if(currentData >= WHEEL_DUTY_CYCLE)
-	{
-
-		out = WHEEL_DUTY_CYCLE;
-	}
+//	//Limit the Current
+//	if(currentData >= WHEEL_DUTY_CYCLE)
+//	{
+//		out = WHEEL_DUTY_CYCLE;
+//	}
 	//Bound the integrator at -4V
-	else if(out < IC_MIN_DUTY_CYCLE)
+	else if(out < OC_MIN_DUTY_CYCLE)
 	{
-		out = IC_MIN_DUTY_CYCLE;    // can't command a "negative" duty cycle
+		out = OC_MIN_DUTY_CYCLE;    // can't command a "negative" duty cycle
 	}
 	
-	OC2R = (unsigned char)out;   // needs to be an unsigned 16-bit number
-    OC2RS = (unsigned char)out;
-    OC3R = (unsigned char)out;
-    OC3RS = (unsigned char)out;
+	OC2R = (uint16_t)out;   // needs to be an unsigned 16-bit number
+    OC2RS = (uint16_t)out;
+    OC3R = (uint16_t)out;
+    OC3RS = (uint16_t)out;
 
 	//The new error value is now the past error value
 	error_val_p = error_val_n;
-    
-    
+    //------------------End PID--------------------
+            
     /*-------------Button De-bouncing-------------*/
 	// Read the raw state of the button pins.
 	btnBtn1.stCur = ( prtBtn1 & ( 1 << bnBtn1 ) ) ? stPressed : stReleased;
@@ -313,12 +330,14 @@ void __ISR(_TIMER_5_VECTOR, ipl7) Timer5Handler(void)
 	if ( cstMaxCnt == PmodBtn2.cst ) {
 		PmodBtn2.stBtn = PmodBtn2.stCur;
 		PmodBtn2.cst = 0;
+        
 	}
 
 	// Update the state of PmodBTN3 if necessary.
 	if ( cstMaxCnt == PmodBtn3.cst ) {
 		PmodBtn3.stBtn = PmodBtn3.stCur;
 		PmodBtn3.cst = 0;
+        
 	}
 
 	// Update the state of PmodBTN4 if necessary.
@@ -381,13 +400,13 @@ void __ISR(_INPUT_CAPTURE_2_VECTOR, ipl5) _IC2_IntHandler(void)
 
     // clear interrupt flag for Input Capture 2
     // increment counter
-    ic2Counter++;
-    if (ic2Counter >= PULSE_PER_REV*20){
-        OC2R = 0;
-        OC2RS = 0;
-        OC3R = 0;
-        OC3RS = 0;
-    }
+//    ic2Counter++;
+//    if (ic2Counter >= PULSE_PER_REV*20){
+//        OC2R = 0;
+//        OC2RS = 0;
+//        OC3R = 0;
+//        OC3RS = 0;
+//    }
     prtLed2Clr	= ( 1 << bnLed2 );
 }
 
@@ -786,7 +805,7 @@ void DeviceInit() {
 
 	// Configure Timer 5.
 	TMR5	= 0;
-	PR5		= 99; // period match every 100 us
+	PR5		= 999; // period match every 1000 us
 	IPC5SET	= ( 1 << 4 ) | ( 1 << 3 ) | ( 1 << 2 ) | ( 1 << 1 ) | ( 1 << 0 ); // interrupt priority level 7, sub 3
 	IFS0CLR = ( 1 << 20);
 	IEC0SET	= ( 1 << 20);
