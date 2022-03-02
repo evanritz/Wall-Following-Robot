@@ -101,6 +101,9 @@
         <property key="use-iar" value="false"/>
         <property key="use-indirect-calls" value="false"/>
       </C32>
+      <C32-AR>
+        <property key="additional-options-chop-files" value="false"/>
+      </C32-AR>
       <C32-AS>
         <property key="assembler-symbols" value=""/>
         <property key="enable-symbols" value="false"/>
@@ -122,6 +125,10 @@
         <property key="warning-level" value=""/>
         <appendMe value="-gdwarf-2"/>
       </C32-AS>
+      <C32-CO>
+        <property key="coverage-enable" value=""/>
+        <property key="stack-guidance" value="false"/>
+      </C32-CO>
       <C32-LD>
         <property key="additional-options-use-response-files" value="false"/>
         <property key="additional-options-write-sla" value="false"/>
@@ -132,7 +139,7 @@
         <property key="exclude-floating-point-library" value="false"/>
         <property key="exclude-standard-libraries" value="false"/>
         <property key="extra-lib-directories"
-                  value="..\..\..\..\..\Program Files (x86)\Microchip\MPLAB C32 Suite\lib;..\..\..\..\..\Program Files (x86)\Microchip\MPLAB C32 Suite\pic32mx\lib;;."/>
+                  value="..\..\..\..\Program Files (x86)\Microchip\MPLAB C32 Suite\lib;..\..\..\..\Program Files (x86)\Microchip\MPLAB C32 Suite\pic32mx\lib;;."/>
         <property key="fill-flash-options-addr" value=""/>
         <property key="fill-flash-options-const" value=""/>
         <property key="fill-flash-options-how" value="0"/>
@@ -183,9 +190,7 @@
         <property key="wpo-lto" value="false"/>
       </C32Global>
       <PK3OBPlatformTool>
-        <property key="tracecontrol.disablemacros" value="true"/>
-        <property key="tracecontrol.medium" value="0"/>
-        <property key="tracecontrol.select" value="0"/>
+        <property key="firmware.download.all" value="false"/>
       </PK3OBPlatformTool>
     </conf>
   </confs>

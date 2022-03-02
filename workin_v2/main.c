@@ -85,9 +85,9 @@
 #define CAPTURE_SIZE        100      // ER 2/9
 #define PULSE_PER_REV       137      // KZ 2/16/22     Possible motors have different gear ratio to give us lower than expected 160 Pulse/rev
 #define WHEEL_DUTY_CYCLE    2000     // KZ 2/16/22     Affects PWM signal to wheels on a scale of 0 to 9999
-#define MAX_MIN_EI          150      // KZ 2/16/22     Max and min (negative) value of which the integrated error in the PID control is bound between
-#define OC_MAX_DUTY_CYCLE   9999.0     // KZ 2/16/22
-#define OC_MIN_DUTY_CYCLE   0.0        // KZ 2/16/22
+#define MAX_MIN_EI          10000      // KZ 2/16/22     Max and min (negative) value of which the integrated error in the PID control is bound between
+#define OC_MAX_DUTY_CYCLE   10000     // KZ 2/16/22 ER 2/23 
+#define OC_MIN_DUTY_CYCLE   0        // KZ 2/16/22 ER 2/23
 
 struct btn {
 	BYTE	stBtn;	// status of the button (pressed or released)
@@ -108,6 +108,7 @@ static	char szScrollRight[] = {0x1B, '[', '1', 'A', 0};
 static	char szWrapMode[] = {0x1B, '[', '0', 'h', 0}; 
 
 static	char szCursorPos[] = {0x1B, '[', '1', ';', '0', 'H', 0}; 
+static	char szNextLineCursorPos[] = {0x1B, '[', '8', ';', '0', 'H', 0}; 
 /* ------------------------------------------------------------ */
 /*				Global Variables				                */
 /* ------------------------------------------------------------ */
@@ -135,6 +136,11 @@ int ic3TimeDataIdx = 0;
 uint32_t ic2Counter = 0;
 uint32_t ic2CounterExtra = 0;           //KZ added 2/16/22 as a test variable to make sure counter is accurate both in and out of the while loop in the IC2 
 uint32_t ic3Counter = 0;
+
+float targetSpeed = 1.5; // Max is 1.82 Min is 0
+float pid;
+float pwm;
+float speed;
 
 
 
@@ -174,90 +180,75 @@ void __ISR(_TIMER_5_VECTOR, ipl7) Timer5Handler(void)
 	mT5ClearIntFlag();
 	prtLed1Set = (1<<bnLed1); //change JMH 2/2/22
     
-     /*-------------PID Control-------------*/
-    // In this algorithm, the desired Data is the user input into the program at the #define WHEEL_DUTY_CYCLE
-    // **Current algorithm is in terms of an output compare value range of 0 to 9999, not speed in ft/s.**
-    /////////////////Local Variables/////////////
-    float desired_ft_sec = 10;
-    uint16_t desiredData = (desired_ft_sec)*5474;    //Time between pulses required for requested duty cycle, in us per pulse
-    uint16_t currentData = ic2TimeData[ic2TimeDataIdx-1];
+
+    static float prev_err = 0;
+    static float ei = 0;
     
-    if(ic2TimeDataIdx > 1){
-        uint16_t temp_currentData = ic2TimeData[ic2TimeDataIdx-1] - ic2TimeData[ic2TimeDataIdx - 2];        //index -1 and -2 because index is incremented at end of IC2
-         if( temp_currentData < 0 ){
-            currentData = temp_currentData + 64999;
-        }
-         else{
-             currentData = temp_currentData;
-         }
+    float kp = 1;//1;
+    float ki = 1;//0.5;
+    float kd = 10;//0.01;
+    
+    if (ic2TimeDataIdx > 1)
+    {
+        float curr = ic2TimeData[ic2TimeDataIdx-1];
+        float prev = ic2TimeData[ic2TimeDataIdx-2];
+        
+        float time = curr - prev;
+        
+        if (time < 0)
+            time += 65000;
+       
+        // Grab most recent value
+        // and convert to secs
+        // The value is orig mirco seconds
+        float secs = time * 0.000001;
+        // using time find speed
+        // X pulse * 1 rev / 137 pulse * 0.75 ft / 1 rev = 0.00547445255*X ft
+        // speed = dist/time => ft/s
+        speed = 0.00547445255/secs;
+        
+        // find err between curr and target
+        float err = targetSpeed - speed; 
+        
+        // (dx) find diff between curr err and prev err
+        float ed = err - prev_err;
+        
+        // (intx) sum err over time
+        ei += ki * err;
+        
+        // bound ei
+        if (ei > MAX_MIN_EI)
+            ei = MAX_MIN_EI;
+        else if (ei < -MAX_MIN_EI)
+            ei = -MAX_MIN_EI;
+        
+        // calculate pid 
+        pid = err * kp + ei + ed * kd;            
+         
+        // store curr err in prev err
+        prev_err = err;
+        
+        
+        if (pid > OC_MAX_DUTY_CYCLE)
+            pid = OC_MAX_DUTY_CYCLE;
+        else if (pid < OC_MIN_DUTY_CYCLE)
+            pid = OC_MIN_DUTY_CYCLE;
+        
+        OC2R = (uint32_t) pid;
+        OC2RS = (uint32_t) pid;
+        
+        OC3R = (uint32_t) pid;
+        OC3RS = (uint32_t) pid;
+        
     }
     
-//    static int OC_counter = 0;
-//    OC_counter++;
-//    if( OC_counter >= 8000 )
-//        {desiredData = 8000;}
     
-	//Integration Error
-	static float ei = 0.0;
-	//New Error Value, Output, and Error Difference
-	float error_val_n,out,ed;
-	//Past Error Value
-	static float error_val_p = 0.0;
-	//Direct Constant
-	float kp=1;
-	//Integration Constant
-	float ki=0.5;			
-	//Difference Constant
-	float kd=0.01;			
-	///////////////////////////////////////////////
-
-	//First take New Error Value
-	error_val_n = (float)desiredData - (float)currentData;
-
-	//Then take Difference between Error Values
-	ed  = error_val_n - error_val_p;
-
-	//Compound the error every speed check
-	ei += ki*error_val_n;
-
-//	if(ei > MAX_MIN_EI)
-//	{
-//		ei = MAX_MIN_EI;
-//	}
-//	else if(ei < -MAX_MIN_EI)
-//	{
-//		ei = -MAX_MIN_EI;
-//	}
-	
-	//The output of the Speed Control Algorithm
-	out = error_val_n * kp + ei + ed * kd;
-
-	// check to make sure out is in a valid range, 0 to 64999.  If not, limit it.
-	if(out > OC_MAX_DUTY_CYCLE)
-	{
-		out = OC_MAX_DUTY_CYCLE;  // can't command more than 100% duty cycle
-	}
-//	//Limit the Current
-//	if(currentData >= WHEEL_DUTY_CYCLE)
-//	{
-//		out = WHEEL_DUTY_CYCLE;
-//	}
-	//Bound the integrator at -4V
-	else if(out < OC_MIN_DUTY_CYCLE)
-	{
-		out = OC_MIN_DUTY_CYCLE;    // can't command a "negative" duty cycle
-	}
-	
-	OC2R = (uint16_t)out;   // needs to be an unsigned 16-bit number
-    OC2RS = (uint16_t)out;
-    OC3R = (uint16_t)out;
-    OC3RS = (uint16_t)out;
-
-	//The new error value is now the past error value
-	error_val_p = error_val_n;
-    //------------------End PID--------------------
-            
-    /*-------------Button De-bouncing-------------*/
+    
+    
+    
+        
+    
+    
 	// Read the raw state of the button pins.
 	btnBtn1.stCur = ( prtBtn1 & ( 1 << bnBtn1 ) ) ? stPressed : stReleased;
 	btnBtn2.stCur = ( prtBtn2 & ( 1 << bnBtn2 ) ) ? stPressed : stReleased;
@@ -385,6 +376,7 @@ void __ISR(_INPUT_CAPTURE_2_VECTOR, ipl5) _IC2_IntHandler(void)
 {
     // ER 2/9 Hopefully this works
     mIC2ClearIntFlag();
+    ic2Counter++;
     
     prtLed2Set	= ( 1 << bnLed2 );
     uint16_t buffer_data;
@@ -398,15 +390,6 @@ void __ISR(_INPUT_CAPTURE_2_VECTOR, ipl5) _IC2_IntHandler(void)
     ic2TimeDataIdx++;
     ic2TimeDataIdx %= CAPTURE_SIZE;
 
-    // clear interrupt flag for Input Capture 2
-    // increment counter
-//    ic2Counter++;
-//    if (ic2Counter >= PULSE_PER_REV*20){
-//        OC2R = 0;
-//        OC2RS = 0;
-//        OC3R = 0;
-//        OC3RS = 0;
-//    }
     prtLed2Clr	= ( 1 << bnLed2 );
 }
 
@@ -476,30 +459,50 @@ int main(void) {
 	AppInit();
     InitLeds(); //change JMH 2/2/22
 
-	INTDisableInterrupts();
+	//INTDisableInterrupts();
 	DelayMs(500);
 
 	//write to PmodCLS
-	SpiEnable();
-	SpiPutBuff(szClearScreen, 3);
-	DelayMs(4);
-	SpiPutBuff(szBacklightOn, 4);
-	DelayMs(4);
-	SpiPutBuff(szCursorOff, 4);
-	DelayMs(4);
-	SpiPutBuff("Hello from", 10);
-	DelayMs(4);
-	SpiPutBuff(szCursorPos, 6);
-	DelayMs(4);
-	SpiPutBuff("Digilent!", 9);
-	DelayMs(2000);
-	SpiDisable();
+	//SpiEnable();
+//	SpiPutBuff(szClearScreen, 3);
+//	DelayMs(4);
+//	SpiPutBuff(szBacklightOn, 4);
+//	DelayMs(4);
+//	SpiPutBuff(szCursorOff, 4);
+//	DelayMs(4);
+//	SpiPutBuff("Hello from", 10);
+//	DelayMs(4);
+//	SpiPutBuff(szCursorPos, 6);
+//	DelayMs(4);
+//	SpiPutBuff("Digilent!", 9);
+//	DelayMs(2000);
+    
+    char strout[100];
+	//SpiDisable();
 
-	INTEnableInterrupts();
+	//INTEnableInterrupts();
 	while (fTrue)
-	{		
-		INTDisableInterrupts();
-	
+	{	
+        
+		//INTDisableInterrupts();
+        
+        SpiEnable();
+        SpiPutBuff(szClearScreen, 3);
+        DelayMs(4);
+        SpiPutBuff(szBacklightOn, 4);
+        DelayMs(4);
+        SpiPutBuff(szCursorOff, 4);
+        DelayMs(4);
+        sprintf(strout, "PID=%.2f", pid);
+        SpiPutBuff(strout, strlen(strout));
+        DelayMs(4);
+        SpiPutBuff(szCursorPos, 6);
+        DelayMs(4);
+        sprintf(strout, "TS=%.2f CS=%.2f", targetSpeed, speed);
+        SpiPutBuff(strout, strlen(strout));
+        DelayMs(250);
+        SpiDisable();
+        
 		//get data here
 		stBtn1 = btnBtn1.stBtn;
 		stBtn2 = btnBtn2.stBtn;
@@ -514,7 +517,7 @@ int main(void) {
 		stPmodSwt3 = PmodSwt3.stBtn;
 		stPmodSwt4 = PmodSwt4.stBtn;
 
-		INTEnableInterrupts();
+		//INTEnableInterrupts();
 		//configure OCR to go forward
 
 //		if(stPressed == stPmodBtn1){
