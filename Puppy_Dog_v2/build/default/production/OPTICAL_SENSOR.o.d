@@ -1,0 +1,4 @@
+build/default/production/OPTICAL_SENSOR.o: OPTICAL_SENSOR.c \
+ OPTICAL_SENSOR.h
+
+OPTICAL_SENSOR.h:
